@@ -1,24 +1,23 @@
-# ML Stock Prediction (Alpaca + Random Forest)
+# ML Stock Market Prediction Model 
 
-by Camille Yabu and Antonio Wydler
+Authors: Camille Yabu, Antonio Wydler
 
-This project pulls daily stock bar data from Alpaca (Paper Trading) and trains a machine learning model to predict the next trading day's movement.
+Machine learning project exploring next-day stock price prediction using historical market data and technical indicators.
 
-## What it does
-- Downloads historical daily bars (e.g., from 2022 to present)
-- Builds technical indicator features (SMA, RSI, volatility)
-- Trains a Random Forest model
-- Evaluates:
-  - MAE on next-day return regression
-  - Direction accuracy (up vs down)
+## Features
+- Pulls stock data from Alpaca Markets API  
+- Uses technical indicators and market context features (SPY, QQQ)  
+- Random Forest models for price and directional prediction  
+- Includes walk-forward validation and baseline comparisons  
 
-## Example Result
-On AAPL daily data (2022–recent), the model reached ~57.7% next-day direction accuracy.
+## Current Coverage
+- AAPL  
+- NVDA  
+
+## Example Results
+- NVDA MAE ≈ $3.5  
+- Direction accuracy ≈ 53%  
 
 ## Setup
-
-### 1) Create a virtual environment (optional)
 ```bash
-python -m venv venv
-source venv/bin/activate   # mac/linux
-# venv\Scripts\activate    # windows
+pip install -r requirements.txt
