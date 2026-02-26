@@ -3,3 +3,8 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+# ignore generated outputs
+outputs/
+.venv/
+.env
+__pycache__/
