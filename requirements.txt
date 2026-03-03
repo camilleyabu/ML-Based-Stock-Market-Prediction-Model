@@ -1,6 +1,20 @@
-alpaca-trade-api
-pandas
+# Core
 numpy
-scikit-learn
+pandas
 matplotlib
+seaborn
 python-dotenv
+
+# ML (Random Forest, metrics, preprocessing)
+scikit-learn
+
+# Data
+alpaca-trade-api
+
+# Deep learning (LSTM)
+tensorflow-macos; platform_system=="Darwin"
+tensorflow; platform_system!="Darwin"
+
+# etc
+joblib
+scipy
