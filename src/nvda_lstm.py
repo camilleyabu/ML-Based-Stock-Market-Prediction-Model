@@ -1,154 +1,142 @@
 import os
+from pathlib import Path
+from datetime import datetime
+
 import numpy as np
-import pandas as pd
+import matplotlib.pyplot as plt
 from dotenv import load_dotenv
-import alpaca_trade_api as tradeapi
-from alpaca_trade_api.rest import TimeFrame
-from datetime import datetime, timezone, timedelta
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_absolute_error
 
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
+from tensorflow.keras.layers import LSTM, Dense, Dropout
+from tensorflow.keras.callbacks import EarlyStopping
 
-import matplotlib.pyplot as plt
+from features import fetch_bars, build_features, FEATURE_COLS, save_metrics
 
-from pathlib import Path
-
-
-# =========================
-# Load data (same as RF)
-# =========================
 
 load_dotenv()
-
 API_KEY = os.getenv("API_KEY")
 API_SECRET = os.getenv("API_SECRET")
-
-api = tradeapi.REST(API_KEY, API_SECRET, "https://paper-api.alpaca.markets", api_version="v2")
-
-symbol = "NVDA"
-start = "2022-01-01"
-end = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
-
-df = api.get_bars(symbol, TimeFrame.Day, start=start, end=end, feed="iex").df
-df = df.reset_index()
-
-# target: next-day return
-df["return"] = df["close"].pct_change()
-df["target"] = df["return"].shift(-1)
-
-df = df.dropna()
+if not API_KEY or not API_SECRET:
+    raise SystemExit("Missing API keys. Check .env for API_KEY and API_SECRET.")
 
 # =========================
-# Scale data
+# Fetch and build features
 # =========================
+bars = fetch_bars(API_KEY, API_SECRET, ["NVDA", "SPY", "QQQ"],
+                  start=datetime(2022, 1, 1), end=datetime.now())
+df = build_features(bars["NVDA"], bars["SPY"], bars["QQQ"])
 
+X_all = df[FEATURE_COLS].values
+y_all = df["target_return_next"].values
+n = len(df)
+
+# =========================
+# 80/20 chronological split
+# =========================
+split_idx = int(n * 0.8)
+
+# Fit scaler only on training data to prevent leakage
 scaler = StandardScaler()
-returns_scaled = scaler.fit_transform(df[["return"]])
+scaler.fit(X_all[:split_idx])
+X_scaled = scaler.transform(X_all)
 
 # =========================
-# Create sequences
+# Create sliding-window sequences
+# Sequence i → features rows [i : i+SEQ_LEN], label = y[i+SEQ_LEN]
+# Test sequences label df rows [split_idx : n]
 # =========================
-
 SEQ_LEN = 20
 
-X = []
-y = []
+X_seq, y_seq = [], []
+for i in range(n - SEQ_LEN):
+    X_seq.append(X_scaled[i:i + SEQ_LEN])
+    y_seq.append(y_all[i + SEQ_LEN])
 
-for i in range(len(returns_scaled) - SEQ_LEN):
+X_seq = np.array(X_seq)
+y_seq = np.array(y_seq)
 
-    X.append(returns_scaled[i:i+SEQ_LEN])
-    y.append(df["target"].iloc[i+SEQ_LEN])
-
-X = np.array(X)
-y = np.array(y)
-
-# =========================
-# Train test split
-# =========================
-
-split = int(len(X) * 0.8)
-
-X_train = X[:split]
-X_test = X[split:]
-
-y_train = y[:split]
-y_test = y[split:]
+seq_split = split_idx - SEQ_LEN
+X_train, X_test = X_seq[:seq_split], X_seq[seq_split:]
+y_train, y_test = y_seq[:seq_split], y_seq[seq_split:]
 
 # =========================
 # Build LSTM model
 # =========================
+n_features = len(FEATURE_COLS)
 
-model = Sequential()
+model = Sequential([
+    LSTM(64, input_shape=(SEQ_LEN, n_features), return_sequences=True),
+    Dropout(0.2),
+    LSTM(32),
+    Dropout(0.2),
+    Dense(1),
+])
+model.compile(optimizer="adam", loss="mse")
 
-model.add(LSTM(50, input_shape=(SEQ_LEN, 1)))
-model.add(Dense(1))
-
-model.compile(
-    optimizer="adam",
-    loss="mse"
-)
-
-# =========================
-# Train
-# =========================
+early_stop = EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True)
 
 history = model.fit(
-    X_train,
-    y_train,
-    epochs=20,
+    X_train, y_train,
+    epochs=50,
     batch_size=32,
     validation_data=(X_test, y_test),
-    verbose=1
+    callbacks=[early_stop],
+    verbose=1,
 )
 
 # =========================
-# Predict
+# Predict + metrics
 # =========================
-
 pred = model.predict(X_test).flatten()
 
 mae = mean_absolute_error(y_test, pred)
+actual_dir = (y_test > 0).astype(int)
+pred_dir = (pred > 0).astype(int)
+direction_acc = float(np.mean(actual_dir == pred_dir))
 
-print("LSTM MAE:", mae)
+# Baseline: "tomorrow direction = yesterday direction" aligned to test window
+baseline_dir = (y_all[split_idx - 1:-1] > 0).astype(int)
+baseline_acc = float(np.mean(baseline_dir == actual_dir))
 
-# Direction accuracy
-
-actual_dir = (y_test > 0)
-pred_dir = (pred > 0)
-
-accuracy = np.mean(actual_dir == pred_dir)
-
-print("LSTM Direction Accuracy:", accuracy)
+print(f"LSTM MAE:                {mae:.5f}")
+print(f"LSTM Direction Accuracy: {direction_acc:.4f}")
+print(f"Baseline accuracy:       {baseline_acc:.4f}")
 
 # =========================
-# Plot and SAVE output
+# Save outputs
+# Test predictions correspond to df rows [split_idx : split_idx + len(y_test)]
 # =========================
-
-plt.figure(figsize=(12, 6))
-
-plt.plot(y_test, label="Actual")
-plt.plot(pred, label="Predicted")
-
-plt.legend()
-plt.title("NVDA Next-Day Return Prediction (LSTM)")
-plt.xlabel("Test Time Index")
-plt.ylabel("Return")
-
-plt.tight_layout()
-
-# Create outputs folder same way as Random Forest script
 project_root = Path(__file__).resolve().parents[1]
 out_dir = project_root / "outputs"
 out_dir.mkdir(exist_ok=True)
 
-# Save plot
+test_rows = df.iloc[split_idx:split_idx + len(y_test)].reset_index(drop=True)
+out = test_rows[["timestamp", "close"]].copy()
+out["actual_next_return"] = y_test
+out["pred_next_return"] = pred
+out["actual_dir"] = actual_dir
+out["pred_dir"] = pred_dir
+out["pred_next_close"] = out["close"] * (1 + out["pred_next_return"])
+out.to_csv(out_dir / "nvda_lstm_predictions.csv", index=False)
+
+save_metrics(out_dir, "NVDA", "LSTM", mae, direction_acc, baseline_acc, len(y_test))
+
+# =========================
+# Plot
+# =========================
+plt.figure(figsize=(12, 6))
+plt.plot(y_test, label="Actual")
+plt.plot(pred, label="Predicted")
+plt.legend()
+plt.title("NVDA Next-Day Return Prediction (LSTM)")
+plt.xlabel("Test Time Index")
+plt.ylabel("Return")
+plt.tight_layout()
 plot_path = out_dir / "nvda_lstm_predictions_plot.png"
 plt.savefig(plot_path, dpi=200)
-
 print("Saved plot to:", plot_path)
-
 plt.show()

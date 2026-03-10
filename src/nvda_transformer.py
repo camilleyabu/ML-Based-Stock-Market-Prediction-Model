@@ -9,12 +9,10 @@ from dotenv import load_dotenv
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_absolute_error
 
-import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.callbacks import EarlyStopping
 
 from features import fetch_bars, build_features, FEATURE_COLS, save_metrics
+from transformer_model import build_transformer
 
 
 load_dotenv()
@@ -26,9 +24,9 @@ if not API_KEY or not API_SECRET:
 # =========================
 # Fetch and build features
 # =========================
-bars = fetch_bars(API_KEY, API_SECRET, ["AAPL", "SPY", "QQQ"],
+bars = fetch_bars(API_KEY, API_SECRET, ["NVDA", "SPY", "QQQ"],
                   start=datetime(2022, 1, 1), end=datetime.now())
-df = build_features(bars["AAPL"], bars["SPY"], bars["QQQ"])
+df = build_features(bars["NVDA"], bars["SPY"], bars["QQQ"])
 
 X_all = df[FEATURE_COLS].values
 y_all = df["target_return_next"].values
@@ -64,24 +62,17 @@ X_train, X_test = X_seq[:seq_split], X_seq[seq_split:]
 y_train, y_test = y_seq[:seq_split], y_seq[seq_split:]
 
 # =========================
-# Build LSTM model
+# Build and train Transformer
 # =========================
 n_features = len(FEATURE_COLS)
+model = build_transformer(seq_len=SEQ_LEN, n_features=n_features)
+model.summary()
 
-model = Sequential([
-    LSTM(64, input_shape=(SEQ_LEN, n_features), return_sequences=True),
-    Dropout(0.2),
-    LSTM(32),
-    Dropout(0.2),
-    Dense(1),
-])
-model.compile(optimizer="adam", loss="mse")
-
-early_stop = EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True)
+early_stop = EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True)
 
 history = model.fit(
     X_train, y_train,
-    epochs=50,
+    epochs=100,
     batch_size=32,
     validation_data=(X_test, y_test),
     callbacks=[early_stop],
@@ -98,17 +89,16 @@ actual_dir = (y_test > 0).astype(int)
 pred_dir = (pred > 0).astype(int)
 direction_acc = float(np.mean(actual_dir == pred_dir))
 
-# Baseline: "tomorrow direction = yesterday direction" aligned to test window
+# Baseline: "tomorrow direction = yesterday direction"
 baseline_dir = (y_all[split_idx - 1:-1] > 0).astype(int)
 baseline_acc = float(np.mean(baseline_dir == actual_dir))
 
-print(f"LSTM MAE:                {mae:.5f}")
-print(f"LSTM Direction Accuracy: {direction_acc:.4f}")
-print(f"Baseline accuracy:       {baseline_acc:.4f}")
+print(f"Transformer MAE:                {mae:.5f}")
+print(f"Transformer Direction Accuracy: {direction_acc:.4f}")
+print(f"Baseline accuracy:              {baseline_acc:.4f}")
 
 # =========================
 # Save outputs
-# Test predictions correspond to df rows [split_idx : split_idx + len(y_test)]
 # =========================
 project_root = Path(__file__).resolve().parents[1]
 out_dir = project_root / "outputs"
@@ -121,9 +111,9 @@ out["pred_next_return"] = pred
 out["actual_dir"] = actual_dir
 out["pred_dir"] = pred_dir
 out["pred_next_close"] = out["close"] * (1 + out["pred_next_return"])
-out.to_csv(out_dir / "aapl_lstm_predictions.csv", index=False)
+out.to_csv(out_dir / "nvda_transformer_predictions.csv", index=False)
 
-save_metrics(out_dir, "AAPL", "LSTM", mae, direction_acc, baseline_acc, len(y_test))
+save_metrics(out_dir, "NVDA", "Transformer", mae, direction_acc, baseline_acc, len(y_test))
 
 # =========================
 # Plot
@@ -132,11 +122,11 @@ plt.figure(figsize=(12, 6))
 plt.plot(y_test, label="Actual")
 plt.plot(pred, label="Predicted")
 plt.legend()
-plt.title("AAPL Next-Day Return Prediction (LSTM)")
+plt.title("NVDA Next-Day Return Prediction (Transformer)")
 plt.xlabel("Test Time Index")
 plt.ylabel("Return")
 plt.tight_layout()
-plot_path = out_dir / "aapl_lstm_predictions_plot.png"
+plot_path = out_dir / "nvda_transformer_predictions_plot.png"
 plt.savefig(plot_path, dpi=200)
 print("Saved plot to:", plot_path)
 plt.show()

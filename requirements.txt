@@ -10,6 +10,7 @@ scikit-learn
 
 # Data
 alpaca-trade-api
+alpaca-py
 
 # Deep learning (LSTM)
 tensorflow-macos; platform_system=="Darwin"
